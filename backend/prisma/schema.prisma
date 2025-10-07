@@ -1,0 +1,604 @@
+model BulletinVersion {
+  id               String   @id @default(cuid())
+  bulletinId       String
+  version          Int
+  title            String
+  body             String
+  status           PublishStatus
+  createdAt        DateTime @default(now())
+  createdByUserId  String?
+
+  bulletin Bulletin @relation(fields: [bulletinId], references: [id])
+
+  @@unique([bulletinId, version])
+  @@index([bulletinId])
+}
+
+// -------------------- Auth Tokens --------------------
+model RefreshToken {
+  id               String   @id @default(cuid())
+  userId           String
+  tokenHash        String   @unique
+  createdAt        DateTime @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdByIp      String?
+  replacedByTokenId String?
+
+  user             User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// -------------------- Shipping --------------------
+enum ShipmentProvider {
+  manual
+  ninjavan
+}
+
+enum ShipmentStatus {
+  pending
+  labeled
+  in_transit
+  delivered
+  canceled
+}
+
+model Shipment {
+  id            String          @id @default(cuid())
+  orderId       String
+  provider      ShipmentProvider
+  status        ShipmentStatus  @default(pending)
+  trackingNumber String?
+  carrierName   String?
+  labelKey      String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  order         Order           @relation(fields: [orderId], references: [id])
+  events        ShipmentEvent[]
+
+  @@index([orderId])
+}
+
+model ShipmentEvent {
+  id          String         @id @default(cuid())
+  shipmentId  String
+  status      ShipmentStatus
+  description String?
+  occurredAt  DateTime       @default(now())
+
+  shipment    Shipment       @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+}
+
+// -------------------- Store --------------------
+enum OrderStatus {
+  pending
+  awaiting_payment
+  paid
+  fulfilled
+  canceled
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  sku         String   @unique
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(20, 2)
+  currency    String
+  taxRatePct  Decimal  @db.Decimal(5, 2) // e.g., 12.00 for 12%
+  status      PublishStatus @default(draft)
+  stock       Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderItems  OrderItem[]
+}
+
+model Order {
+  id         String   @id @default(cuid())
+  userId     String
+  status     OrderStatus @default(pending)
+  subtotal   Decimal  @db.Decimal(20, 2)
+  tax        Decimal  @db.Decimal(20, 2)
+  total      Decimal  @db.Decimal(20, 2)
+  currency   String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id])
+  items      OrderItem[]
+  shipments  Shipment[]
+
+  @@index([userId])
+}
+
+model OrderItem {
+  id           String   @id @default(cuid())
+  orderId      String
+  productId    String
+  quantity     Int
+  unitPrice    Decimal  @db.Decimal(20, 2)
+  currency     String
+  taxRatePct   Decimal  @db.Decimal(5, 2)
+  lineSubtotal Decimal  @db.Decimal(20, 2)
+  lineTax      Decimal  @db.Decimal(20, 2)
+  lineTotal    Decimal  @db.Decimal(20, 2)
+
+  order        Order   @relation(fields: [orderId], references: [id])
+  product      Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// -------------------- UBI Engine --------------------
+enum UbiProgramStatus {
+  active
+  archived
+}
+
+enum UbiCycleStatus {
+  draft
+  computed
+  pending_approval
+  approved
+  rejected
+}
+
+enum UbiPayoutStatus {
+  pending
+  approved
+  rejected
+}
+
+model UbiProgram {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  rules       Json
+  status      UbiProgramStatus @default(active)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  enrollments UbiEnrollment[]
+  cycles      UbiCycle[]
+}
+
+model UbiEnrollment {
+  id         String @id @default(cuid())
+  userId     String
+  programId  String
+  status     String @default("active")
+  createdAt  DateTime @default(now())
+
+  user     User        @relation(fields: [userId], references: [id])
+  program  UbiProgram  @relation(fields: [programId], references: [id])
+
+  @@unique([userId, programId])
+  @@index([programId])
+}
+
+model UbiCycle {
+  id         String @id @default(cuid())
+  programId  String
+  periodStart DateTime
+  periodEnd   DateTime
+  status     UbiCycleStatus @default(draft)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  program   UbiProgram @relation(fields: [programId], references: [id])
+  payouts   UbiPayout[]
+
+  @@index([programId])
+}
+
+model UbiPayout {
+  id        String @id @default(cuid())
+  cycleId   String
+  userId    String
+  amount    Decimal @db.Decimal(20, 2)
+  currency  String
+  status    UbiPayoutStatus @default(pending)
+  createdAt DateTime @default(now())
+
+  cycle   UbiCycle @relation(fields: [cycleId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
+  ledger  LedgerEntry[]
+
+  @@index([cycleId])
+  @@index([userId])
+}
+// Prisma schema for Cocoon Hub (minimal v0)
+// Expand models in phases; start with core auth/membership to unblock DB wiring
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships           UserMembership[]
+  manualPaymentRequests ManualPaymentRequest[]
+  ledgerEntries         LedgerEntry[]
+  kycApplications       KycApplication[]
+  ubiEnrollments        UbiEnrollment[]
+  ubiPayouts            UbiPayout[]
+  registrations         Registration[]
+  academyEnrollments    AcademyEnrollment[]
+  certificates          Certificate[]
+  orders                Order[]
+  notificationMessages  NotificationMessage[]
+  userRoles             UserRole[]
+  refreshTokens         RefreshToken[]
+}
+
+// -------------------- RBAC --------------------
+enum Role {
+  admin
+  reviewer
+  finance
+  member
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  role      Role
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, role])
+  @@index([userId])
+}
+
+model MembershipTier {
+  id           String   @id @default(cuid())
+  name         String   @unique // Black, Titanium, Platinum, Gold
+  priority     Int
+  entitlements Json
+
+  users        UserMembership[]
+}
+
+model UserMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  tierId    String
+  status    String   @default("active")
+  startAt   DateTime @default(now())
+  endAt     DateTime?
+
+  user      User           @relation(fields: [userId], references: [id])
+  tier      MembershipTier @relation(fields: [tierId], references: [id])
+
+  @@unique([userId, tierId])
+}
+
+// -------------------- Payments (Manual) --------------------
+enum PaymentStatus {
+  submitted
+  under_review
+  approved
+  rejected
+  canceled
+}
+
+model Bank {
+  code            String                  @id
+  name            String
+  configs         BankConfig[]
+  manualRequests  ManualPaymentRequest[]
+}
+
+model BankConfig {
+  id        String @id @default(cuid())
+  bankCode  String @unique
+  enabled   Boolean @default(true)
+  dailyLimit Int    @default(0)
+
+  bank      Bank   @relation(fields: [bankCode], references: [code])
+}
+
+enum LedgerType {
+  credit
+  debit
+}
+
+model ManualPaymentRequest {
+  id        String   @id @default(cuid())
+  userId    String
+  bankCode  String
+  amount    Decimal  @db.Decimal(20, 2)
+  currency  String
+  status    PaymentStatus @default(submitted)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bank      Bank   @relation(fields: [bankCode], references: [code])
+  user      User   @relation(fields: [userId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@index([userId])
+  @@index([bankCode])
+}
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  manualRequestId String?
+  ubiPayoutId String?
+  amount    Decimal  @db.Decimal(20, 2)
+  currency  String
+  type      LedgerType
+  ref       String?
+  createdAt DateTime @default(now())
+
+  user      User   @relation(fields: [userId], references: [id])
+  manualRequest ManualPaymentRequest? @relation(fields: [manualRequestId], references: [id])
+  ubiPayout UbiPayout? @relation(fields: [ubiPayoutId], references: [id])
+
+  @@index([userId])
+  @@index([manualRequestId])
+  @@index([ubiPayoutId])
+}
+
+// -------------------- KYC (Manual) --------------------
+enum KycStatus {
+  pending
+  approved
+  rejected
+  needs_more_info
+}
+
+model KycApplication {
+  id        String   @id @default(cuid())
+  userId    String
+  status    KycStatus @default(pending)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User   @relation(fields: [userId], references: [id])
+  documents KycDocument[]
+  decisions KycDecisionLog[]
+
+  @@index([userId])
+}
+
+model KycDocument {
+  id            String @id @default(cuid())
+  applicationId String
+  type          String
+  fileRef       String
+  verifiedAt    DateTime?
+
+  application KycApplication @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId])
+}
+
+model KycDecisionLog {
+  id            String   @id @default(cuid())
+  applicationId String
+  reviewerUserId String?
+  decision      KycStatus
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  application KycApplication @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId])
+}
+
+// -------------------- Bulletins --------------------
+enum PublishStatus {
+  draft
+  published
+  archived
+}
+
+model Bulletin {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  status      PublishStatus @default(draft)
+  publishedAt DateTime?
+  versions    BulletinVersion[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// -------------------- SSBA (Academy) --------------------
+enum CohortStatus {
+  planned
+  active
+  completed
+  canceled
+}
+
+enum AcademyEnrollmentStatus {
+  enrolled
+  waitlisted
+  completed
+  dropped
+}
+
+enum CertificateFormat {
+  docx
+}
+
+model Course {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  syllabus    Json?
+  status      PublishStatus @default(draft)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cohorts     Cohort[]
+}
+
+model Cohort {
+  id        String   @id @default(cuid())
+  courseId  String
+  code      String   @default("")
+  startAt   DateTime
+  endAt     DateTime
+  capacity  Int?
+  status    CohortStatus @default(planned)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course    Course  @relation(fields: [courseId], references: [id])
+  enrollments AcademyEnrollment[]
+
+  @@index([courseId])
+}
+
+model AcademyEnrollment {
+  id        String   @id @default(cuid())
+  cohortId  String
+  userId    String
+  status    AcademyEnrollmentStatus @default(enrolled)
+  progress  Int      @default(0) // percentage 0..100
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cohort    Cohort @relation(fields: [cohortId], references: [id])
+  user      User   @relation(fields: [userId], references: [id])
+  certificate Certificate?
+
+  @@unique([cohortId, userId])
+  @@index([cohortId])
+  @@index([userId])
+}
+
+model Certificate {
+  id             String   @id @default(cuid())
+  enrollmentId   String   @unique
+  userId         String
+  format         CertificateFormat @default(docx)
+  key            String   // R2 object key
+  issuedAt       DateTime @default(now())
+
+  enrollment     AcademyEnrollment @relation(fields: [enrollmentId], references: [id])
+  user           User   @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// -------------------- Events --------------------
+enum EventStatus {
+  draft
+  published
+  canceled
+}
+
+enum RegistrationStatus {
+  registered
+  waitlisted
+  checked_in
+  canceled
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  startAt     DateTime
+  endAt       DateTime
+  location    String?
+  capacity    Int?
+  status      EventStatus @default(draft)
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  registrations Registration[]
+
+  @@index([status, startAt])
+}
+
+model Registration {
+  id          String   @id @default(cuid())
+  eventId     String
+  userId      String
+  status      RegistrationStatus @default(registered)
+  createdAt   DateTime @default(now())
+  checkedInAt DateTime?
+
+  event  Event @relation(fields: [eventId], references: [id])
+  user   User  @relation(fields: [userId], references: [id])
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+}
+
+// -------------------- Notifications --------------------
+enum NotificationChannel {
+  email
+  sms
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  failed
+}
+
+model NotificationTemplate {
+  id        String               @id @default(cuid())
+  key       String
+  channel   NotificationChannel
+  subject   String?
+  body      String
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@unique([key, channel])
+}
+
+model NotificationMessage {
+  id            String               @id @default(cuid())
+  userId        String?
+  channel       NotificationChannel
+  to            String
+  subject       String?
+  body          String
+  templateKey   String?
+  variables     Json?
+  status        NotificationStatus   @default(pending)
+  provider      String?
+  attempts      Int                  @default(0)
+  lastError     String?
+  lastAttemptAt DateTime?
+  createdAt     DateTime             @default(now())
+  sentAt        DateTime?
+
+  user          User?                @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([channel])
+  @@index([userId])
+}

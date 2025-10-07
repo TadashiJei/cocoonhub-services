@@ -1,0 +1,84 @@
+name: Backend CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  backend-ci:
+    name: Lint, Test, Build, Prisma
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cocoonhub_ci
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cocoonhub_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/cocoonhub_ci?schema=public
+      JWT_SECRET: ci-secret
+      DB_EAGER_CONNECT: false
+      ALLOW_DEV_ROLES_HEADER: false
+      THROTTLE_TTL_SECONDS: 60
+      THROTTLE_LIMIT: 100
+      # Optional: provide a base64 32-byte key if you want to enable app-layer encryption in CI
+      # APP_DATA_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate and schema apply
+        run: |
+          pnpm prisma:generate
+          if [ -d prisma/migrations ] && [ "$(ls -A prisma/migrations)" ]; then
+            echo "Running prisma migrate deploy..."
+            pnpm prisma migrate deploy
+          else
+            echo "No migrations found, running prisma db push for CI schema..."
+            pnpm prisma db push
+          fi
+
+      - name: Seed database (idempotent)
+        run: pnpm seed
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test -- --passWithNoTests
+
+      - name: E2E Tests
+        run: pnpm test:e2e -- --runInBand --detectOpenHandles --forceExit --testTimeout=60000
