@@ -2,7 +2,6 @@ import { Body, Controller, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { createHmac } from 'node:crypto';
 import type { Role } from './roles.enum';
-import { Throttle } from '@nestjs/throttler';
 
 function base64url(input: Buffer | string) {
   return Buffer.from(input)
@@ -20,7 +19,6 @@ function signHS256(data: string, secret: string) {
 @Controller('auth')
 export class DevAuthController {
   @Post('dev-token')
-  @Throttle(5, 60)
   createDevToken(
     @Body()
     body: {
